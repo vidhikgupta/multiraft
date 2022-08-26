@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -45,6 +46,9 @@ var (
 		"localhost:63001",
 		"localhost:63002",
 		"localhost:63003",
+		//"34.131.129.59:8094",
+		//"34.93.228.166:8094",
+		//	"34.100.168.202:8094",
 	}
 )
 
@@ -71,12 +75,20 @@ func printUsage() {
 	fmt.Fprintf(os.Stdout, "get key1\n")
 }
 
+func hash(s string) uint32 {
+	h := fnv.New32a()
+	h.Write([]byte(s))
+	return h.Sum32()
+}
+
 func main() {
 
 	replicaID := flag.Int("replicaid", 1, "ReplicaID to use")
 	addr := flag.String("addr", "", "Nodehost address")
 	join := flag.Bool("join", false, "Joining a new node")
+	records := flag.Int("records", 100, "Number of records to be inserted")
 	flag.Parse()
+	fmt.Println("number of records", *records)
 
 	if len(*addr) == 0 && *replicaID > 3 || *replicaID < 1 {
 		fmt.Fprintf(os.Stderr, "invalid nodeid %d, it must be 1, 2 or 3", *replicaID)
@@ -116,20 +128,20 @@ func main() {
 		ElectionRTT:        5,
 		HeartbeatRTT:       1,
 		CheckQuorum:        true,
-		SnapshotEntries:    10,
+		SnapshotEntries:    100,
 		CompactionOverhead: 5,
 	}
 	datadir := filepath.Join(
 		"example-data",
-		//"multigroup-data",
+		"multigroup-data",
 		fmt.Sprintf("node%d", *replicaID))
 
 	nhc := config.NodeHostConfig{
 		WALDir:         datadir,
 		NodeHostDir:    datadir,
-		RTTMillisecond: 400,
+		RTTMillisecond: 200,
 		RaftAddress:    nodeAddr,
-		//ListenAddress: "0.0.0.0:8094",
+		//ListenAddress:  "0.0.0.0:8094",
 		// RaftRPCFactory: rpc.NewRaftGRPC,
 	}
 	// create a NodeHost instance. it is a facade interface allowing access to
@@ -176,8 +188,6 @@ func main() {
 				return
 			}
 
-			// neVal := "put" + " " + randstr.Hex(8) + " " + randstr.Hex(16)
-			// ch <- neVal
 			ch <- s
 		}
 	})
@@ -194,45 +204,23 @@ func main() {
 				if !ok {
 					return
 				}
-				// neVal := "put" + " " + randstr.Hex(8) + " " + randstr.Hex(16)
-
-				// fmt.Println("================v", v)
 				msg := strings.Replace(v, "\n", "", 1)
 
 				key1 := randstr.Hex(8)
 				val1 := randstr.Hex(16)
 				rt, key, val, ok := parseCommand(msg)
 
-				// if !ok {
-				// 	fmt.Fprintf(os.Stderr, "invalid input\n")
-				// 	printUsage()
-				// 	continue
-				// }
-
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				if rt == GET {
-					// if strings.HasSuffix(msg, "?") {
-					// user message ends with "?", make a proposal to update the second
-					// raft group
 					result, err := nh.SyncRead(ctx, shardID2, []byte(key))
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "SyncRead returned error %v\n", err)
 					} else {
 						fmt.Fprintf(os.Stdout, "query key: %s, result: %s\n", key, result)
 					}
-					// } else {
-					// 	// message not ends with "?", make a proposal to update the first
-					// 	// raft group
-					// result1, err1 := nh.SyncRead(ctx, shardID1, []byte(key))
-					// if err1 != nil {
-					// 	fmt.Fprintf(os.Stderr, "SyncRead returned error %v\n", err1)
-					// } else {
-					// 	fmt.Fprintf(os.Stdout, "query key: %s, result: %s\n", key, result1)
-					// }
-					// }
 				} else {
 
-					for i := 0; i < 1000; i++ {
+					for i := 0; i < *records; i++ {
 						key1 = randstr.Hex(8)
 						val1 = randstr.Hex(16)
 
@@ -248,15 +236,14 @@ func main() {
 						if _err != nil {
 							panic(err)
 						}
-						// if strings.HasSuffix(msg, "?") {
-						// user message ends with "?", make a proposal to update the second
-						// raft group
+
+						//if hash(key)%2 == 0 {
+						//	fmt.Println("first machine")
 						_, err = nh.SyncPropose(ctx, cs2, data)
-						// } else {
-						// 	// message not ends with "?", make a proposal to update the first
-						// 	// raft group
+						//} else {
+						//fmt.Println("second machine")
 						_, err = nh.SyncPropose(ctx, cs1, data)
-						// }
+						//}
 						if err != nil {
 							fmt.Fprintf(os.Stderr, "SyncPropose returned error %v\n", err)
 						}
