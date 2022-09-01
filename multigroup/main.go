@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/lni/dragonboat/v4"
+	"github.com/lni/dragonboat/v4/client"
 	"github.com/lni/dragonboat/v4/config"
 	"github.com/lni/dragonboat/v4/logger"
 	"github.com/lni/goutils/syncutil"
@@ -40,46 +41,20 @@ const (
 )
 
 var (
-	// initial nodes count is three, their addresses are also fixed
-	// this is for simplicity
 	addresses = []string{
 		"localhost:63001",
 		"localhost:63002",
 		"localhost:63003",
-		//"34.131.129.59:8094",
-		//"34.93.228.166:8094",
-		//	"34.100.168.202:8094",
 	}
 )
 
-func parseCommand(msg string) (RequestType, string, string, bool) {
-	parts := strings.Split(strings.TrimSpace(msg), " ")
-	if len(parts) == 0 || (parts[0] != "put" && parts[0] != "get") {
-		return PUT, "", "", false
+var (
+	addresses2 = []string{
+		"localhost:63004",
+		"localhost:63005",
+		"localhost:63006",
 	}
-	if parts[0] == "put" {
-		if len(parts) != 3 {
-			return PUT, "", "", false
-		}
-		return PUT, parts[1], parts[2], true
-	}
-	if len(parts) != 2 {
-		return GET, "", "", false
-	}
-	return GET, parts[1], "", true
-}
-
-func printUsage() {
-	fmt.Fprintf(os.Stdout, "Usage - \n")
-	fmt.Fprintf(os.Stdout, "put key1 value1\n")
-	fmt.Fprintf(os.Stdout, "get key1\n")
-}
-
-func hash(s string) uint32 {
-	h := fnv.New32a()
-	h.Write([]byte(s))
-	return h.Sum32()
-}
+)
 
 func main() {
 
@@ -87,10 +62,13 @@ func main() {
 	addr := flag.String("addr", "", "Nodehost address")
 	join := flag.Bool("join", false, "Joining a new node")
 	records := flag.Int("records", 100, "Number of records to be inserted")
+	raftGroup := flag.Int("raftGroup", 1, "Raft group the node belongs too")
+
 	flag.Parse()
+
 	fmt.Println("number of records", *records)
 
-	if len(*addr) == 0 && *replicaID > 3 || *replicaID < 1 {
+	if len(*addr) == 0 && *replicaID > 6 || *replicaID < 1 {
 		fmt.Fprintf(os.Stderr, "invalid nodeid %d, it must be 1, 2 or 3", *replicaID)
 		os.Exit(1)
 	}
@@ -101,6 +79,7 @@ func main() {
 	}
 
 	initialMembers := make(map[uint64]string)
+	initialMembers2 := make(map[uint64]string)
 	if !*join {
 		for idx, v := range addresses {
 			// key is the ReplicaID, ReplicaID is not allowed to be 0
@@ -109,11 +88,21 @@ func main() {
 		}
 	}
 
+	if !*join {
+		for idx, v := range addresses2 {
+			// key is the ReplicaID, ReplicaID is not allowed to be 0
+			// value is the raft address
+			initialMembers2[uint64(idx+1)] = v
+		}
+	}
+
 	var nodeAddr string
 	if len(*addr) != 0 {
 		nodeAddr = *addr
-	} else {
+	} else if *replicaID <= 3 {
 		nodeAddr = initialMembers[uint64(*replicaID)]
+	} else {
+		nodeAddr = initialMembers2[uint64(*replicaID-3)]
 	}
 	fmt.Fprintf(os.Stdout, "node address: %s\n", nodeAddr)
 	// change the log verbosity
@@ -132,8 +121,13 @@ func main() {
 		CompactionOverhead: 5,
 	}
 	datadir := filepath.Join(
-		"example-data",
-		"multigroup-data",
+		"shard1-data",
+		//"multigroup-data",
+		fmt.Sprintf("node%d", *replicaID))
+
+	datadir2 := filepath.Join(
+		"shard2-data",
+		//"multigroup-data",
 		fmt.Sprintf("node%d", *replicaID))
 
 	nhc := config.NodeHostConfig{
@@ -144,29 +138,46 @@ func main() {
 		//ListenAddress:  "0.0.0.0:8094",
 		// RaftRPCFactory: rpc.NewRaftGRPC,
 	}
+
+	nhc2 := config.NodeHostConfig{
+		WALDir:         datadir2,
+		NodeHostDir:    datadir2,
+		RTTMillisecond: 200,
+		RaftAddress:    nodeAddr,
+		//ListenAddress:  "0.0.0.0:8094",
+		// RaftRPCFactory: rpc.NewRaftGRPC,
+	}
+
+	var nh *dragonboat.NodeHost
+	var nh2 *dragonboat.NodeHost
+	var err error
 	// create a NodeHost instance. it is a facade interface allowing access to
 	// all functionalities provided by dragonboat.
-	nh, err := dragonboat.NewNodeHost(nhc)
+	if *raftGroup == 1 {
+		nh, err = dragonboat.NewNodeHost(nhc)
+	} else {
+		nh2, err = dragonboat.NewNodeHost(nhc2)
+	}
 	if err != nil {
 		panic(err)
 	}
 	defer nh.Close()
 
-	// start the first cluster
-	// we use ExampleStateMachine as the IStateMachine for this cluster, its
-	// behaviour is identical to the one used in the Hello World example.
 	rc.ShardID = shardID1
-	if err := nh.StartOnDiskReplica(initialMembers, *join, NewDiskKV, rc); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to add cluster, %v\n", err)
-		os.Exit(1)
+	if *raftGroup == 1 {
+		rc.ShardID = shardID1
+		if err := nh.StartOnDiskReplica(initialMembers, *join, NewDiskKV, rc); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to add cluster, %v\n", err)
+			os.Exit(1)
+		}
 	}
 
-	// start the second cluster
-	// we use SecondStateMachine as the IStateMachine for the second cluster
-	rc.ShardID = shardID2
-	if err := nh.StartOnDiskReplica(initialMembers, *join, NewDiskKV, rc); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to add cluster, %v\n", err)
-		os.Exit(1)
+	if *raftGroup == 2 {
+		rc.ShardID = shardID2
+		if err := nh2.StartOnDiskReplica(initialMembers2, *join, NewDiskKV, rc); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to add cluster, %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	raftStopper := syncutil.NewStopper()
@@ -196,8 +207,14 @@ func main() {
 	raftStopper.RunWorker(func() {
 		// use NO-OP client session here
 		// check the example in godoc to see how to use a regular client session
-		cs1 := nh.GetNoOPSession(shardID1)
-		cs2 := nh.GetNoOPSession(shardID2)
+		var cs1 *client.Session
+		var cs2 *client.Session
+		if *raftGroup == 1 {
+			cs1 = nh.GetNoOPSession(shardID1)
+		}
+		if *raftGroup == 2 {
+			cs2 = nh2.GetNoOPSession(shardID1)
+		}
 		for {
 			select {
 			case v, ok := <-ch:
@@ -211,7 +228,14 @@ func main() {
 				rt, key, val, ok := parseCommand(msg)
 
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				if rt == GET {
+				if rt == GET && *replicaID <= 3 {
+					result, err := nh.SyncRead(ctx, shardID1, []byte(key))
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "SyncRead returned error %v\n", err)
+					} else {
+						fmt.Fprintf(os.Stdout, "query key: %s, result: %s\n", key, result)
+					}
+				} else if rt == GET && *replicaID > 3 {
 					result, err := nh.SyncRead(ctx, shardID2, []byte(key))
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "SyncRead returned error %v\n", err)
@@ -257,4 +281,33 @@ func main() {
 		}
 	})
 	raftStopper.Wait()
+}
+
+func parseCommand(msg string) (RequestType, string, string, bool) {
+	parts := strings.Split(strings.TrimSpace(msg), " ")
+	if len(parts) == 0 || (parts[0] != "put" && parts[0] != "get") {
+		return PUT, "", "", false
+	}
+	if parts[0] == "put" {
+		if len(parts) != 3 {
+			return PUT, "", "", false
+		}
+		return PUT, parts[1], parts[2], true
+	}
+	if len(parts) != 2 {
+		return GET, "", "", false
+	}
+	return GET, parts[1], "", true
+}
+
+func printUsage() {
+	fmt.Fprintf(os.Stdout, "Usage - \n")
+	fmt.Fprintf(os.Stdout, "put key1 value1\n")
+	fmt.Fprintf(os.Stdout, "get key1\n")
+}
+
+func hash(s string) uint32 {
+	h := fnv.New32a()
+	h.Write([]byte(s))
+	return h.Sum32()
 }
