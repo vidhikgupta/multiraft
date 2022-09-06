@@ -10,7 +10,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"hash/fnv"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -48,9 +47,6 @@ var (
 		"localhost:63001",
 		"localhost:63002",
 		"localhost:63003",
-		//"34.131.129.59:8094",
-		//"34.93.228.166:8094",
-		//	"34.100.168.202:8094",
 	}
 	errNotMembershipChange = errors.New("not a membership change request")
 )
@@ -76,12 +72,6 @@ func printUsage() {
 	fmt.Fprintf(os.Stdout, "Usage - \n")
 	fmt.Fprintf(os.Stdout, "put key1 value1\n")
 	fmt.Fprintf(os.Stdout, "get key1\n")
-}
-
-func hash(s string) uint32 {
-	h := fnv.New32a()
-	h.Write([]byte(s))
-	return h.Sum32()
 }
 
 // makeMembershipChange makes membership change request.
@@ -204,7 +194,7 @@ func main() {
 		RTTMillisecond: 200,
 		RaftAddress:    nodeAddr,
 		//ListenAddress:  "0.0.0.0:8094",
-		// RaftRPCFactory: rpc.NewRaftGRPC,
+
 	}
 	// create a NodeHost instance. it is a facade interface allowing access to
 	// all functionalities provided by dragonboat.
