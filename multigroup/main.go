@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"hash/fnv"
@@ -14,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -50,6 +52,7 @@ var (
 		//"34.93.228.166:8094",
 		//	"34.100.168.202:8094",
 	}
+	errNotMembershipChange = errors.New("not a membership change request")
 )
 
 func parseCommand(msg string) (RequestType, string, string, bool) {
@@ -79,6 +82,65 @@ func hash(s string) uint32 {
 	h := fnv.New32a()
 	h.Write([]byte(s))
 	return h.Sum32()
+}
+
+// makeMembershipChange makes membership change request.
+func makeMembershipChange(nh *dragonboat.NodeHost,
+	cmd string, addr string, replicaID uint64) {
+	var rs *dragonboat.RequestState
+	var err error
+	if cmd == "add" {
+		// orderID is ignored in standalone mode
+		rs, err = nh.RequestAddReplica(shardID1, replicaID, addr, 0, 3*time.Second)
+		rs, err = nh.RequestAddReplica(shardID2, replicaID, addr, 0, 3*time.Second)
+	} else if cmd == "remove" {
+		rs, err = nh.RequestDeleteReplica(shardID1, replicaID, 0, 3*time.Second)
+		rs, err = nh.RequestDeleteReplica(shardID2, replicaID, 0, 3*time.Second)
+	} else {
+		panic("unknown cmd")
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "membership change failed, %v\n", err)
+		return
+	}
+	select {
+	case r := <-rs.CompletedC:
+		if r.Completed() {
+			fmt.Fprintf(os.Stdout, "membership change completed successfully\n")
+		} else {
+			fmt.Fprintf(os.Stderr, "membership change failed\n")
+		}
+	}
+}
+
+// splitMembershipChangeCmd tries to parse the input string as membership change
+// request. ADD node request has the following expected format -
+// add localhost:63100 4
+// REMOVE node request has the following expected format -
+// remove 4
+func splitMembershipChangeCmd(v string) (string, string, uint64, error) {
+	parts := strings.Split(v, " ")
+	if len(parts) == 2 || len(parts) == 3 {
+		cmd := strings.ToLower(strings.TrimSpace(parts[0]))
+		if cmd != "add" && cmd != "remove" {
+			return "", "", 0, errNotMembershipChange
+		}
+		addr := ""
+		var replicaIDStr string
+		var replicaID uint64
+		var err error
+		if cmd == "add" {
+			addr = strings.TrimSpace(parts[1])
+			replicaIDStr = strings.TrimSpace(parts[2])
+		} else {
+			replicaIDStr = strings.TrimSpace(parts[1])
+		}
+		if replicaID, err = strconv.ParseUint(replicaIDStr, 10, 64); err != nil {
+			return "", "", 0, errNotMembershipChange
+		}
+		return cmd, addr, replicaID, nil
+	}
+	return "", "", 0, errNotMembershipChange
 }
 
 func main() {
@@ -211,41 +273,46 @@ func main() {
 				rt, key, val, ok := parseCommand(msg)
 
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				if rt == GET {
-					result, err := nh.SyncRead(ctx, shardID2, []byte(key))
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "SyncRead returned error %v\n", err)
-					} else {
-						fmt.Fprintf(os.Stdout, "query key: %s, result: %s\n", key, result)
-					}
+				if cmd, addr, replicaID, err := splitMembershipChangeCmd(msg); err == nil {
+					// input is a membership change request
+					makeMembershipChange(nh, cmd, addr, replicaID)
 				} else {
-
-					for i := 0; i < *records; i++ {
-						key1 = randstr.Hex(8)
-						val1 = randstr.Hex(16)
-
-						fmt.Println("================key", key1)
-						fmt.Println("================val", val1)
-						fmt.Println(val)
-
-						kv := &KVData{
-							Key: key1,
-							Val: val1,
-						}
-						data, _err := json.Marshal(kv)
-						if _err != nil {
-							panic(err)
-						}
-
-						//if hash(key)%2 == 0 {
-						//	fmt.Println("first machine")
-						_, err = nh.SyncPropose(ctx, cs2, data)
-						//} else {
-						//fmt.Println("second machine")
-						_, err = nh.SyncPropose(ctx, cs1, data)
-						//}
+					if rt == GET {
+						result, err := nh.SyncRead(ctx, shardID2, []byte(key))
 						if err != nil {
-							fmt.Fprintf(os.Stderr, "SyncPropose returned error %v\n", err)
+							fmt.Fprintf(os.Stderr, "SyncRead returned error %v\n", err)
+						} else {
+							fmt.Fprintf(os.Stdout, "query key: %s, result: %s\n", key, result)
+						}
+					} else {
+
+						for i := 0; i < *records; i++ {
+							key1 = randstr.Hex(8)
+							val1 = randstr.Hex(16)
+
+							fmt.Println("================key", key1)
+							fmt.Println("================val", val1)
+							fmt.Println(val)
+
+							kv := &KVData{
+								Key: key1,
+								Val: val1,
+							}
+							data, _err := json.Marshal(kv)
+							if _err != nil {
+								panic(err)
+							}
+
+							//if hash(key)%2 == 0 {
+							//	fmt.Println("first machine")
+							_, err = nh.SyncPropose(ctx, cs2, data)
+							//} else {
+							//fmt.Println("second machine")
+							_, err = nh.SyncPropose(ctx, cs1, data)
+							//}
+							if err != nil {
+								fmt.Fprintf(os.Stderr, "SyncPropose returned error %v\n", err)
+							}
 						}
 					}
 				}
