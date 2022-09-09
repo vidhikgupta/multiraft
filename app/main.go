@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"hash/fnv"
@@ -11,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -30,6 +32,10 @@ type RequestType uint64
 const (
 	PUT RequestType = iota
 	GET
+)
+
+var (
+	errNotMembershipChange = errors.New("not a membership change request")
 )
 
 func main() {
@@ -141,7 +147,7 @@ func main() {
 	var nh *dragonboat.NodeHost
 	var nh1 *dragonboat.NodeHost
 	var err error
-	if *raftGroup == 100 {
+	if *raftGroup == 1 {
 		nh, err = dragonboat.NewNodeHost(nhc)
 	} else {
 		nh1, err = dragonboat.NewNodeHost(nhc1)
@@ -149,11 +155,10 @@ func main() {
 
 	if err != nil {
 		panic(err)
-
 	}
 	defer nh.Close()
 
-	if *raftGroup == 100 {
+	if *raftGroup == 1 {
 		rc.ShardID = shardID1
 		if err := nh.StartOnDiskReplica(initialMembers, *join, db.NewDiskKV, rc); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to add cluster, %v\n", err)
@@ -201,62 +206,67 @@ func main() {
 				}
 				msg := strings.Replace(v, "\n", "", 1)
 
-				key1 := randstr.Hex(8)
-				val1 := randstr.Hex(16)
-				rt, key, val, ok := parseCommand(msg)
+				rt, key, val, _ := parseCommand(msg)
 
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				ctx1, cancel1 := context.WithTimeout(context.Background(), 10*time.Second)
-				if rt == GET {
-					if *raftGroup == 1 {
-						result, err := nh.SyncRead(ctx, shardID1, []byte(key))
-						if err != nil {
-							fmt.Fprintf(os.Stderr, "SyncRead returned error %v\n", err)
-						} else {
-							fmt.Fprintf(os.Stdout, "query key: %s, result: %s\n", key, result)
-						}
-					} else if *raftGroup == 2 {
-						result, err := nh.SyncRead(ctx, shardID2, []byte(key))
-						if err != nil {
-							fmt.Fprintf(os.Stderr, "SyncRead returned error %v\n", err)
-						} else {
-							fmt.Fprintf(os.Stdout, "query key: %s, result: %s\n", key, result)
-						}
-					}
-
+				if cmd, addr, replicaID, err := splitMembershipChangeCmd(msg); err == nil {
+					// input is a membership change request
+					makeMembershipChange(nh, nh1, cmd, addr, replicaID, *raftGroup, shardID1, shardID2)
 				} else {
-
-					for i := 0; i < 10; i++ {
-						key1 = randstr.Hex(8)
-						val1 = randstr.Hex(16)
-
-						fmt.Println("================key", key1)
-						fmt.Println("================val", val1)
-						fmt.Println(val)
-
-						kv := &db.KVData{
-							Key: key1,
-							Val: val1,
-						}
-						data, _err := json.Marshal(kv)
-						if _err != nil {
-							fmt.Println("", err)
-							panic(err)
-						}
-
+					if rt == GET {
 						if *raftGroup == 1 {
-							cs1 := nh.GetNoOPSession(shardID1)
-							_, err = nh.SyncPropose(ctx, cs1, data)
-
+							fmt.Println("Entered in get call of raft group 1 ***********************")
+							result, err := nh.SyncRead(ctx, shardID1, []byte(key))
 							if err != nil {
-								fmt.Fprintf(os.Stderr, "SyncPropose returned error %v\n", err)
+								fmt.Fprintf(os.Stderr, "SyncRead returned error %v\n", err)
+							} else {
+								fmt.Fprintf(os.Stdout, "query key: %s, result: %s\n", key, result)
 							}
-						} else {
-							cs2 := nh1.GetNoOPSession(shardID2)
-							_, err = nh1.SyncPropose(ctx1, cs2, data)
-
+						} else if *raftGroup == 2 {
+							fmt.Println("Entered in get call of raft group 2 ***********************")
+							result, err := nh1.SyncRead(ctx, shardID2, []byte(key))
 							if err != nil {
-								fmt.Fprintf(os.Stderr, "SyncPropose returned error %v\n", err)
+								fmt.Fprintf(os.Stderr, "SyncRead returned error %v\n", err)
+							} else {
+								fmt.Fprintf(os.Stdout, "query key: %s, result: %s\n", key, result)
+							}
+						}
+
+					} else {
+
+						for i := 0; i < 10; i++ {
+							key1 := randstr.Hex(8)
+							val1 := randstr.Hex(16)
+
+							fmt.Println("================key", key1)
+							fmt.Println("================val", val1)
+							fmt.Println(val)
+
+							kv := &db.KVData{
+								Key: key1,
+								Val: val1,
+							}
+							data, _err := json.Marshal(kv)
+							if _err != nil {
+								fmt.Println("", err)
+								panic(err)
+							}
+
+							if *raftGroup == 1 {
+								cs1 := nh.GetNoOPSession(shardID1)
+								_, err = nh.SyncPropose(ctx, cs1, data)
+
+								if err != nil {
+									fmt.Fprintf(os.Stderr, "SyncPropose returned error %v\n", err)
+								}
+							} else {
+								cs2 := nh1.GetNoOPSession(shardID2)
+								_, err = nh1.SyncPropose(ctx1, cs2, data)
+
+								if err != nil {
+									fmt.Fprintf(os.Stderr, "SyncPropose returned error %v\n", err)
+								}
 							}
 						}
 					}
@@ -313,4 +323,68 @@ func LoadConfiguration(file string) cf.ServerConfig {
 	jsonParser.Decode(&config)
 	return config
 
+}
+
+func makeMembershipChange(nh *dragonboat.NodeHost, nh1 *dragonboat.NodeHost,
+	cmd string, addr string, replicaID uint64, raftGroup int, shardID1 uint64, shardID2 uint64) {
+	var rs *dragonboat.RequestState
+	var err error
+	if cmd == "add" {
+		// orderID is ignored in standalone mode
+		if raftGroup == 1 {
+			rs, err = nh.RequestAddReplica(shardID1, replicaID, addr, 0, 3*time.Second)
+		} else {
+			rs, err = nh1.RequestAddReplica(shardID2, replicaID, addr, 0, 3*time.Second)
+		}
+	} else if cmd == "remove" {
+		if raftGroup == 1 {
+			rs, err = nh.RequestDeleteReplica(shardID1, replicaID, 0, 3*time.Second)
+		} else {
+			rs, err = nh1.RequestDeleteReplica(shardID2, replicaID, 0, 3*time.Second)
+		}
+	} else {
+		panic("unknown cmd")
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "membership change failed, %v\n", err)
+		return
+	}
+	select {
+	case r := <-rs.CompletedC:
+		if r.Completed() {
+			fmt.Fprintf(os.Stdout, "membership change completed successfully\n")
+		} else {
+			fmt.Fprintf(os.Stderr, "membership change failed\n")
+		}
+	}
+}
+
+// splitMembershipChangeCmd tries to parse the input string as membership change
+// request. ADD node request has the following expected format -
+// add localhost:63100 4
+// REMOVE node request has the following expected format -
+// remove 4
+func splitMembershipChangeCmd(v string) (string, string, uint64, error) {
+	parts := strings.Split(v, " ")
+	if len(parts) == 2 || len(parts) == 3 {
+		cmd := strings.ToLower(strings.TrimSpace(parts[0]))
+		if cmd != "add" && cmd != "remove" {
+			return "", "", 0, errNotMembershipChange
+		}
+		addr := ""
+		var replicaIDStr string
+		var replicaID uint64
+		var err error
+		if cmd == "add" {
+			addr = strings.TrimSpace(parts[1])
+			replicaIDStr = strings.TrimSpace(parts[2])
+		} else {
+			replicaIDStr = strings.TrimSpace(parts[1])
+		}
+		if replicaID, err = strconv.ParseUint(replicaIDStr, 10, 64); err != nil {
+			return "", "", 0, errNotMembershipChange
+		}
+		return cmd, addr, replicaID, nil
+	}
+	return "", "", 0, errNotMembershipChange
 }
