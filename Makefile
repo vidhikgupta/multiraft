@@ -14,13 +14,13 @@
 
 GOCMD=go build -v
 
-all:  multigroup 
+all:  app 
 
-multigroup:
-	$(GOCMD) -o example-multigroup github.com/lni/dragonboat-example/v3/multigroup
+app:
+	$(GOCMD) -o multiraft app/main.go
 
 
 clean:
-	@rm -f example-multigroup 
+	@rm -f app 
 
-.PHONY:  multigroup clean
+.PHONY:  app clean

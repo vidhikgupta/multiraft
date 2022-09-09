@@ -1,6 +1,3 @@
-/*multigroup is an example program for dragonboat demonstrating how multiple
-raft groups can be used in an user application.
-*/
 package main
 
 import (
@@ -17,6 +14,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	cf "multiraft/config"
+	db "multiraft/database"
 
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/dragonboat/v4/config"
@@ -46,9 +46,6 @@ var (
 		"localhost:63001",
 		"localhost:63002",
 		"localhost:63003",
-		//"34.131.129.59:8094",
-		//"34.93.228.166:8094",
-		//	"34.100.168.202:8094",
 	}
 )
 
@@ -60,33 +57,19 @@ var (
 	}
 )
 
-func parseCommand(msg string) (RequestType, string, string, bool) {
-	parts := strings.Split(strings.TrimSpace(msg), " ")
-	if len(parts) == 0 || (parts[0] != "put" && parts[0] != "get") {
-		return PUT, "", "", false
-	}
-	if parts[0] == "put" {
-		if len(parts) != 3 {
-			return PUT, "", "", false
-		}
-		return PUT, parts[1], parts[2], true
-	}
-	if len(parts) != 2 {
-		return GET, "", "", false
-	}
-	return GET, parts[1], "", true
-}
+func LoadConfiguration(file string) cf.ServerConfig {
 
-func printUsage() {
-	fmt.Fprintf(os.Stdout, "Usage - \n")
-	fmt.Fprintf(os.Stdout, "put key1 value1\n")
-	fmt.Fprintf(os.Stdout, "get key1\n")
-}
+	var config cf.ServerConfig
+	configFile, err := os.Open(file)
+	if err != nil {
+		fmt.Println(err.Error())
+	}
+	defer configFile.Close()
 
-func hash(s string) uint32 {
-	h := fnv.New32a()
-	h.Write([]byte(s))
-	return h.Sum32()
+	jsonParser := json.NewDecoder(configFile)
+	jsonParser.Decode(&config)
+	return config
+
 }
 
 func main() {
@@ -98,6 +81,17 @@ func main() {
 	raftGroup := flag.Int("raftGroup", 100, "Number of raftGroup")
 	flag.Parse()
 	fmt.Println("number of records", *records)
+
+	configdir := filepath.Join(
+		"config",
+		"config.json")
+
+	test := LoadConfiguration(configdir)
+
+	fmt.Println("------------------------------------------------------", configdir)
+	fmt.Println(test.SmartContractRaftMap)
+	fmt.Println(test.RaftGroups)
+	fmt.Println("**************************", test)
 
 	if len(*addr) == 0 && *replicaID > 6 || *replicaID < 1 {
 		fmt.Fprintf(os.Stderr, "invalid nodeid %d, it must be 1, 2 or 3", *replicaID)
@@ -207,7 +201,7 @@ func main() {
 	// behaviour is identical to the one used in the Hello World example.
 	if *raftGroup == 1 {
 		rc.ShardID = shardID1
-		if err := nh.StartOnDiskReplica(initialMembers, *join, NewDiskKV, rc); err != nil {
+		if err := nh.StartOnDiskReplica(initialMembers, *join, db.NewDiskKV, rc); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to add cluster, %v\n", err)
 			os.Exit(1)
 		}
@@ -215,7 +209,7 @@ func main() {
 		// start the second cluster
 		// we use SecondStateMachine as the IStateMachine for the second cluster
 		rc1.ShardID = shardID2
-		if err := nh1.StartOnDiskReplica(initialMembers1, *join, NewDiskKV, rc1); err != nil {
+		if err := nh1.StartOnDiskReplica(initialMembers1, *join, db.NewDiskKV, rc1); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to add cluster, %v\n", err)
 			os.Exit(1)
 		}
@@ -281,7 +275,7 @@ func main() {
 						fmt.Println("================val", val1)
 						fmt.Println(val)
 
-						kv := &KVData{
+						kv := &db.KVData{
 							Key: key1,
 							Val: val1,
 						}
@@ -317,4 +311,33 @@ func main() {
 		}
 	})
 	raftStopper.Wait()
+}
+
+func parseCommand(msg string) (RequestType, string, string, bool) {
+	parts := strings.Split(strings.TrimSpace(msg), " ")
+	if len(parts) == 0 || (parts[0] != "put" && parts[0] != "get") {
+		return PUT, "", "", false
+	}
+	if parts[0] == "put" {
+		if len(parts) != 3 {
+			return PUT, "", "", false
+		}
+		return PUT, parts[1], parts[2], true
+	}
+	if len(parts) != 2 {
+		return GET, "", "", false
+	}
+	return GET, parts[1], "", true
+}
+
+func printUsage() {
+	fmt.Fprintf(os.Stdout, "Usage - \n")
+	fmt.Fprintf(os.Stdout, "put key1 value1\n")
+	fmt.Fprintf(os.Stdout, "get key1\n")
+}
+
+func hash(s string) uint32 {
+	h := fnv.New32a()
+	h.Write([]byte(s))
+	return h.Sum32()
 }
