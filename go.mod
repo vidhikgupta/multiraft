@@ -17,7 +17,6 @@ require (
 	github.com/cockroachdb/redact v1.1.3 // indirect
 	github.com/getsentry/sentry-go v0.12.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
-	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/btree v0.0.0-20180813153112-4030bb1f1f0c // indirect
 	github.com/google/uuid v1.3.0 // indirect
@@ -32,8 +31,6 @@ require (
 	github.com/klauspost/compress v1.11.7 // indirect
 	github.com/kr/pretty v0.3.0 // indirect
 	github.com/kr/text v0.2.0 // indirect
-	github.com/lni/dragonboat v2.1.7+incompatible // indirect
-	github.com/lni/dragonboat-example/v3 v3.0.0-20220604123533-25d608db0374 // indirect
 	github.com/lni/vfs v0.2.1-0.20220408085249-8be85be1c3c1 // indirect
 	github.com/miekg/dns v1.1.26 // indirect
 	github.com/pierrec/lz4/v4 v4.1.14 // indirect
@@ -46,7 +43,6 @@ require (
 	golang.org/x/exp v0.0.0-20200513190911-00229845015e // indirect
 	golang.org/x/net v0.0.0-20211008194852-3b03d305991f // indirect
 	golang.org/x/sys v0.0.0-20220209214540-3681064d5158 // indirect
-	google.golang.org/protobuf v1.26.0 // indirect
 )
 
 go 1.19

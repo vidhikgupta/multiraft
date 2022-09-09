@@ -6,8 +6,8 @@ type ServerConfig struct {
 }
 
 type RaftGroup struct {
-	RaftID    string    `json:"raftID"`
-	Addresses []Address `json:"addresses"`
+	RaftID    uint64   `json:"raftID"`
+	Addresses []string `json:"addresses"`
 }
 
 type Address struct {

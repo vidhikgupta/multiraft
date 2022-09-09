@@ -1,37 +1,19 @@
 {
     "raftGroups": [
       {
-        "raftID": "100",
+        "raftID": 100,
         "addresses": [
-          {
-            "host": "localhost",
-            "port": "8081"
-          },
-          {
-            "host": "localhost",
-            "port": "8082"
-          },
-          {
-            "host": "localhost",
-            "port": "8083"
-          }
+            "localhost:63001",
+            "localhost:8082",
+            "localhost:8083"
         ]
       },
       {
-        "raftID": "101",
+        "raftID": 101,
         "addresses": [
-          {
-            "host": "localhost",
-            "port": "8084"
-          },
-          {
-            "host": "localhost",
-            "port": "8085"
-          },
-          {
-            "host": "localhost",
-            "port": "8086"
-          }
+            "localhost:8084",
+            "localhost:8085",
+            "localhost:8086"
         ]
       }
     ],

@@ -28,72 +28,30 @@ import (
 type RequestType uint64
 
 const (
-	// we use two raft groups in this example, they are identified by the cluster
-	// ID values below
-	shardID1 uint64 = 100
-	shardID2 uint64 = 101
-)
-
-const (
 	PUT RequestType = iota
 	GET
 )
-
-var (
-	// initial nodes count is three, their addresses are also fixed
-	// this is for simplicity
-	addresses = []string{
-		"localhost:63001",
-		"localhost:63002",
-		"localhost:63003",
-	}
-)
-
-var (
-	addresses1 = []string{
-		"localhost:63004",
-		"localhost:63005",
-		"localhost:63006",
-	}
-)
-
-func LoadConfiguration(file string) cf.ServerConfig {
-
-	var config cf.ServerConfig
-	configFile, err := os.Open(file)
-	if err != nil {
-		fmt.Println(err.Error())
-	}
-	defer configFile.Close()
-
-	jsonParser := json.NewDecoder(configFile)
-	jsonParser.Decode(&config)
-	return config
-
-}
 
 func main() {
 
 	replicaID := flag.Int("replicaid", 1, "ReplicaID to use")
 	addr := flag.String("addr", "", "Nodehost address")
 	join := flag.Bool("join", false, "Joining a new node")
-	records := flag.Int("records", 100, "Number of records to be inserted")
 	raftGroup := flag.Int("raftGroup", 100, "Number of raftGroup")
 	flag.Parse()
-	fmt.Println("number of records", *records)
 
 	configdir := filepath.Join(
 		"config",
 		"config.json")
 
-	test := LoadConfiguration(configdir)
+	serverConfig := LoadConfiguration(configdir)
 
-	fmt.Println("------------------------------------------------------", configdir)
-	fmt.Println(test.SmartContractRaftMap)
-	fmt.Println(test.RaftGroups)
-	fmt.Println("**************************", test)
+	fmt.Println(serverConfig.RaftGroups[0].Addresses[0])
 
-	if len(*addr) == 0 && *replicaID > 6 || *replicaID < 1 {
+	shardID1 := serverConfig.RaftGroups[0].RaftID
+	shardID2 := serverConfig.RaftGroups[1].RaftID
+
+	if len(*addr) == 0 && *replicaID > 3 || *replicaID < 1 {
 		fmt.Fprintf(os.Stderr, "invalid nodeid %d, it must be 1, 2 or 3", *replicaID)
 		os.Exit(1)
 	}
@@ -106,16 +64,14 @@ func main() {
 	initialMembers := make(map[uint64]string)
 	initialMembers1 := make(map[uint64]string)
 	if !*join {
-		for idx, v := range addresses {
-			// key is the ReplicaID, ReplicaID is not allowed to be 0
-			// value is the raft address
+		for idx, v := range serverConfig.RaftGroups[0].Addresses {
 			initialMembers[uint64(idx+1)] = v
 		}
 
 	}
 
 	if !*join {
-		for idx, v := range addresses1 {
+		for idx, v := range serverConfig.RaftGroups[1].Addresses {
 			initialMembers1[uint64(idx+1)] = v
 		}
 	}
@@ -129,8 +85,9 @@ func main() {
 	} else {
 		nodeAddr1 = initialMembers1[uint64(*replicaID)]
 	}
-	fmt.Fprintf(os.Stdout, "node address: %s\n", nodeAddr)
-	fmt.Fprintf(os.Stdout, "node address: %s\n", nodeAddr1)
+
+	fmt.Println("nodeAddr", nodeAddr)
+	fmt.Println("nodeAddr1", nodeAddr1)
 	// change the log verbosity
 	logger.GetLogger("raft").SetLevel(logger.DEBUG)
 	logger.GetLogger("rsm").SetLevel(logger.DEBUG)
@@ -184,7 +141,7 @@ func main() {
 	var nh *dragonboat.NodeHost
 	var nh1 *dragonboat.NodeHost
 	var err error
-	if *raftGroup == 1 {
+	if *raftGroup == 100 {
 		nh, err = dragonboat.NewNodeHost(nhc)
 	} else {
 		nh1, err = dragonboat.NewNodeHost(nhc1)
@@ -196,18 +153,13 @@ func main() {
 	}
 	defer nh.Close()
 
-	// start the first cluster
-	// we use ExampleStateMachine as the IStateMachine for this cluster, its
-	// behaviour is identical to the one used in the Hello World example.
-	if *raftGroup == 1 {
+	if *raftGroup == 100 {
 		rc.ShardID = shardID1
 		if err := nh.StartOnDiskReplica(initialMembers, *join, db.NewDiskKV, rc); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to add cluster, %v\n", err)
 			os.Exit(1)
 		}
 	} else {
-		// start the second cluster
-		// we use SecondStateMachine as the IStateMachine for the second cluster
 		rc1.ShardID = shardID2
 		if err := nh1.StartOnDiskReplica(initialMembers1, *join, db.NewDiskKV, rc1); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to add cluster, %v\n", err)
@@ -230,7 +182,6 @@ func main() {
 			if s == "exit\n" {
 				raftStopper.Stop()
 				raftStopper.Stop()
-				// no data will be lost/corrupted if nodehost.Stop() is not called
 				nh.Close()
 				return
 			}
@@ -241,8 +192,6 @@ func main() {
 	printUsage()
 
 	raftStopper.RunWorker(func() {
-		// use NO-OP client session here
-		// check the example in godoc to see how to use a regular client session
 
 		for {
 			select {
@@ -259,15 +208,25 @@ func main() {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				ctx1, cancel1 := context.WithTimeout(context.Background(), 10*time.Second)
 				if rt == GET {
-					result, err := nh.SyncRead(ctx, shardID2, []byte(key))
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "SyncRead returned error %v\n", err)
-					} else {
-						fmt.Fprintf(os.Stdout, "query key: %s, result: %s\n", key, result)
+					if *raftGroup == 1 {
+						result, err := nh.SyncRead(ctx, shardID1, []byte(key))
+						if err != nil {
+							fmt.Fprintf(os.Stderr, "SyncRead returned error %v\n", err)
+						} else {
+							fmt.Fprintf(os.Stdout, "query key: %s, result: %s\n", key, result)
+						}
+					} else if *raftGroup == 2 {
+						result, err := nh.SyncRead(ctx, shardID2, []byte(key))
+						if err != nil {
+							fmt.Fprintf(os.Stderr, "SyncRead returned error %v\n", err)
+						} else {
+							fmt.Fprintf(os.Stdout, "query key: %s, result: %s\n", key, result)
+						}
 					}
+
 				} else {
 
-					for i := 0; i < *records; i++ {
+					for i := 0; i < 10; i++ {
 						key1 = randstr.Hex(8)
 						val1 = randstr.Hex(16)
 
@@ -340,4 +299,18 @@ func hash(s string) uint32 {
 	h := fnv.New32a()
 	h.Write([]byte(s))
 	return h.Sum32()
+}
+
+func LoadConfiguration(file string) cf.ServerConfig {
+	var config cf.ServerConfig
+	configFile, err := os.Open(file)
+	if err != nil {
+		fmt.Println(err.Error())
+	}
+	defer configFile.Close()
+
+	jsonParser := json.NewDecoder(configFile)
+	jsonParser.Decode(&config)
+	return config
+
 }
